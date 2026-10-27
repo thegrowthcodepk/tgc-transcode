@@ -1,1 +1,101 @@
-# placeholder
+name: Transcode to 480p
+on:
+  repository_dispatch:
+    types: [transcode]
+jobs:
+  transcode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Mask job token
+        env:
+          JOB_TOKEN: ${{ github.event.client_payload.job_token }}
+        run: echo "::add-mask::$JOB_TOKEN"
+
+      - name: Get job info
+        env:
+          JOB_TOKEN: ${{ github.event.client_payload.job_token }}
+        run: |
+          curl -s --http1.1 --fail "https://tgc-lms.alishezi315.workers.dev/api/jobs/info?job_token=$JOB_TOKEN" -o /tmp/info.json
+          python3 - << 'PYEOF'
+          import json, os
+          d = json.load(open('/tmp/info.json'))
+          s = d['source']
+          w, h = s.get('w'), s.get('h')
+          small = (w is not None and h is not None and min(w, h) <= 480)
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('SMALL=%s\n' % ('true' if small else 'false'))
+          print('small:', small, 'dims:', w, h)
+          PYEOF
+
+      - name: Small video fast path (already 480p or smaller)
+        if: env.SMALL == 'true'
+        env:
+          JOB_TOKEN: ${{ github.event.client_payload.job_token }}
+        run: |
+          python3 - << 'PYEOF'
+          import json, os, urllib.request
+          tok = os.environ['JOB_TOKEN']
+          d = json.load(open('/tmp/info.json'))
+          s = d['source']
+          def post(path, body):
+              req = urllib.request.Request(
+                  'https://tgc-lms.alishezi315.workers.dev' + path,
+                  data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
+              return json.load(urllib.request.urlopen(req))
+          print(post('/api/jobs/rendition-link', {'job_token': tok, 'quality': '480',
+              'drive_id': s['drive_id'], 'width': s['w'], 'height': s['h'], 'size': s['size']}))
+          print(post('/api/jobs/complete', {'job_token': tok}))
+          PYEOF
+
+      - name: Download source
+        if: env.SMALL != 'true'
+        env:
+          JOB_TOKEN: ${{ github.event.client_payload.job_token }}
+        run: curl -s --http1.1 --fail "https://tgc-lms.alishezi315.workers.dev/api/jobs/media?job_token=$JOB_TOKEN" -o /tmp/source.mp4
+
+      - name: Transcode to 480p
+        if: env.SMALL != 'true'
+        run: |
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 /tmp/source.mp4
+          ffmpeg -y -i /tmp/source.mp4 -vf "scale='if(lt(iw,ih),480,trunc(480*iw/ih/2)*2)':'if(lt(iw,ih),trunc(480*ih/iw/2)*2,480)'" -c:v libx264 -preset veryfast -crf 23 -g 48 -keyint_min 48 -pix_fmt yuv420p -c:a aac -movflags +faststart /tmp/r480.mp4
+
+      - name: Upload rendition and complete
+        if: env.SMALL != 'true'
+        env:
+          JOB_TOKEN: ${{ github.event.client_payload.job_token }}
+        run: |
+          python3 - << 'PYEOF'
+          import base64, json, os, subprocess, urllib.request
+          tok = os.environ['JOB_TOKEN']
+          out = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+              '-show_entries', 'stream=width,height', '-of', 'csv=p=0', '/tmp/r480.mp4']).decode().strip()
+          w, h = [int(x) for x in out.split(',')]
+          data = base64.b64encode(open('/tmp/r480.mp4', 'rb').read()).decode()
+          assert len(data) <= 40000000, 'rendition too large for upload'
+          def post(path, body):
+              req = urllib.request.Request(
+                  'https://tgc-lms.alishezi315.workers.dev' + path,
+                  data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
+              return json.load(urllib.request.urlopen(req))
+          print(post('/api/jobs/rendition', {'job_token': tok, 'quality': '480',
+              'mime': 'video/mp4', 'width': w, 'height': h, 'data': data}))
+          print(post('/api/jobs/complete', {'job_token': tok}))
+          PYEOF
+
+      - name: Report failure
+        if: failure()
+        env:
+          JOB_TOKEN: ${{ github.event.client_payload.job_token }}
+        run: |
+          python3 - << 'PYEOF'
+          import json, os, urllib.request
+          try:
+              req = urllib.request.Request(
+                  'https://tgc-lms.alishezi315.workers.dev/api/jobs/fail',
+                  data=json.dumps({'job_token': os.environ['JOB_TOKEN']}).encode(),
+                  headers={'Content-Type': 'application/json'})
+              print(urllib.request.urlopen(req).read().decode())
+          except Exception as e:
+              print('fail report failed:', e)
+          PYEOF
