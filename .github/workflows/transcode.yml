@@ -48,9 +48,9 @@ jobs:
                   'https://tgc-lms.alishezi315.workers.dev' + path,
                   data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
               return json.load(urllib.request.urlopen(req))
-          print(post('/api/jobs/rendition-link', {'job_token': tok, 'quality': '480',
+          print(post('/api/jobs/rendition-link?job_token=' + tok, {'job_token': tok, 'quality': '480',
               'drive_id': s['drive_id'], 'width': s['w'], 'height': s['h'], 'size': s['size']}))
-          print(post('/api/jobs/complete', {'job_token': tok}))
+          print(post('/api/jobs/complete?job_token=' + tok, {'job_token': tok}))
           PYEOF
 
       - name: Download source
