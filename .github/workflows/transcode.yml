@@ -11,7 +11,7 @@ jobs:
         env:
           JOB_TOKEN: ${{ github.event.client_payload.job_token }}
         run: echo "::add-mask::$JOB_TOKEN"
-      
+
       - name: Install ffmpeg
         run: |
                     curl --fail --location https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
@@ -42,19 +42,15 @@ jobs:
           JOB_TOKEN: ${{ github.event.client_payload.job_token }}
         run: |
           python3 - << 'PYEOF'
-          import json, os, urllib.request
+          import json, os
           tok = os.environ['JOB_TOKEN']
           d = json.load(open('/tmp/info.json'))
           s = d['source']
-          def post(path, body):
-              req = urllib.request.Request(
-                  'https://tgc-lms.alishezi315.workers.dev' + path,
-                  data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
-              return json.load(urllib.request.urlopen(req))
-          print(post('/api/jobs/rendition-link?job_token=' + tok, {'job_token': tok, 'quality': '480',
-              'drive_id': s['drive_id'], 'width': s['w'], 'height': s['h'], 'size': s['size']}))
-          print(post('/api/jobs/complete?job_token=' + tok, {'job_token': tok}))
+          json.dump({'job_token': tok, 'quality': '480', 'drive_id': s['drive_id'], 'width': s['w'], 'height': s['h'], 'size': s['size']}, open('/tmp/rendition-link.json', 'w'))
+          json.dump({'job_token': tok}, open('/tmp/complete.json', 'w'))
           PYEOF
+          curl -s --http1.1 --fail -X POST -H 'Content-Type: application/json' -d @/tmp/rendition-link.json "https://tgc-lms.alishezi315.workers.dev/api/jobs/rendition-link?job_token=$JOB_TOKEN"
+          curl -s --http1.1 --fail -X POST -H 'Content-Type: application/json' -d @/tmp/complete.json "https://tgc-lms.alishezi315.workers.dev/api/jobs/complete?job_token=$JOB_TOKEN"
 
       - name: Download source
         if: env.SMALL != 'true'
@@ -74,22 +70,18 @@ jobs:
           JOB_TOKEN: ${{ github.event.client_payload.job_token }}
         run: |
           python3 - << 'PYEOF'
-          import base64, json, os, subprocess, urllib.request
+          import base64, json, os, subprocess
           tok = os.environ['JOB_TOKEN']
           out = subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
               '-show_entries', 'stream=width,height', '-of', 'csv=p=0', '/tmp/r480.mp4']).decode().strip()
           w, h = [int(x) for x in out.split(',')]
           data = base64.b64encode(open('/tmp/r480.mp4', 'rb').read()).decode()
           assert len(data) <= 40000000, 'rendition too large for upload'
-          def post(path, body):
-              req = urllib.request.Request(
-                  'https://tgc-lms.alishezi315.workers.dev' + path,
-                  data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
-              return json.load(urllib.request.urlopen(req))
-          print(post('/api/jobs/rendition?job_token=' + tok, {'job_token': tok, 'quality': '480',
-              'mime': 'video/mp4', 'width': w, 'height': h, 'data': data}))
-          print(post('/api/jobs/complete?job_token=' + tok, {'job_token': tok}))
+          json.dump({'job_token': tok, 'quality': '480', 'mime': 'video/mp4', 'width': w, 'height': h, 'data': data}, open('/tmp/rendition.json', 'w'))
+          json.dump({'job_token': tok}, open('/tmp/complete.json', 'w'))
           PYEOF
+          curl -s --http1.1 --fail -X POST -H 'Content-Type: application/json' -d @/tmp/rendition.json "https://tgc-lms.alishezi315.workers.dev/api/jobs/rendition?job_token=$JOB_TOKEN"
+          curl -s --http1.1 --fail -X POST -H 'Content-Type: application/json' -d @/tmp/complete.json "https://tgc-lms.alishezi315.workers.dev/api/jobs/complete?job_token=$JOB_TOKEN"
 
       - name: Report failure
         if: failure()
@@ -97,13 +89,7 @@ jobs:
           JOB_TOKEN: ${{ github.event.client_payload.job_token }}
         run: |
           python3 - << 'PYEOF'
-          import json, os, urllib.request
-          try:
-              req = urllib.request.Request(
-                  'https://tgc-lms.alishezi315.workers.dev/api/jobs/fail?job_token=' + os.environ['JOB_TOKEN'],
-                  data=json.dumps({'job_token': os.environ['JOB_TOKEN']}).encode(),
-                  headers={'Content-Type': 'application/json'})
-              print(urllib.request.urlopen(req).read().decode())
-          except Exception as e:
-              print('fail report failed:', e)
+          import json, os
+          json.dump({'job_token': os.environ['JOB_TOKEN']}, open('/tmp/fail.json', 'w'))
           PYEOF
+          curl -s --http1.1 --fail -X POST -H 'Content-Type: application/json' -d @/tmp/fail.json "https://tgc-lms.alishezi315.workers.dev/api/jobs/fail?job_token=$JOB_TOKEN" || echo 'fail report failed'
