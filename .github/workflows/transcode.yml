@@ -11,6 +11,11 @@ jobs:
         env:
           JOB_TOKEN: ${{ github.event.client_payload.job_token }}
         run: echo "::add-mask::$JOB_TOKEN"
+      
+      - name: Install ffmpeg
+        run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
 
       - name: Get job info
         env:
